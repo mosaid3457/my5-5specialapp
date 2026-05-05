@@ -26,6 +26,8 @@ type MeSpeak = {
 
 type OfflineVoice = TTSVoice & {
   mespeakVoice: string;
+  pitch?: number;
+  speedMultiplier?: number;
 };
 
 const offlineVoices: OfflineVoice[] = [
@@ -37,11 +39,51 @@ const offlineVoices: OfflineVoice[] = [
     mespeakVoice: 'en/en-us',
   },
   {
+    voiceURI: 'offline-espeak-en-us-male',
+    name: 'Wavenet-B',
+    lang: 'en-US',
+    localService: true,
+    gender: 'male',
+    mespeakVoice: 'en/en-us',
+    pitch: 32,
+    speedMultiplier: 0.96,
+  },
+  {
+    voiceURI: 'offline-espeak-en-us-female',
+    name: 'Wavenet-C',
+    lang: 'en-US',
+    localService: true,
+    gender: 'female',
+    mespeakVoice: 'en/en-us',
+    pitch: 68,
+    speedMultiplier: 1.04,
+  },
+  {
     voiceURI: 'offline-espeak-de',
     name: 'Offline German',
     lang: 'de-DE',
     localService: true,
     mespeakVoice: 'de',
+  },
+  {
+    voiceURI: 'offline-espeak-de-male',
+    name: 'Conrad',
+    lang: 'de-DE',
+    localService: true,
+    gender: 'male',
+    mespeakVoice: 'de',
+    pitch: 34,
+    speedMultiplier: 0.96,
+  },
+  {
+    voiceURI: 'offline-espeak-de-female',
+    name: 'Katja',
+    lang: 'de-DE',
+    localService: true,
+    gender: 'female',
+    mespeakVoice: 'de',
+    pitch: 68,
+    speedMultiplier: 1.04,
   },
 ];
 
@@ -122,7 +164,8 @@ export const speakOffline = (
 
   const started = offlineTts.speak(text, {
     voice: voice.mespeakVoice,
-    speed: Math.round(175 * (opts.rate ?? 1)),
+    pitch: voice.pitch,
+    speed: Math.round(175 * (opts.rate ?? 1) * (voice.speedMultiplier ?? 1)),
     volume: 1,
     callback: () => onDone?.(),
   });

@@ -306,8 +306,10 @@ export const DeckSettingsDialog = ({
     onSave({
       ttsFrontLang: draft.ttsFrontLang || undefined,
       ttsFrontVoiceURI: draft.ttsFrontLang ? (draft.ttsFrontVoiceURI || undefined) : undefined,
+      ttsFrontVoiceURIs: draft.ttsFrontLang && draft.ttsFrontVoiceURI ? [draft.ttsFrontVoiceURI] : undefined,
       ttsBackLang: draft.ttsBackLang || undefined,
       ttsBackVoiceURI: draft.ttsBackLang ? (draft.ttsBackVoiceURI || undefined) : undefined,
+      ttsBackVoiceURIs: draft.ttsBackLang && draft.ttsBackVoiceURI ? [draft.ttsBackVoiceURI] : undefined,
       ttsAutoPlay: draft.ttsAutoPlay,
       ttsRate: draft.ttsRate,
       newPerDay: parseLimit(draft.newPerDay),

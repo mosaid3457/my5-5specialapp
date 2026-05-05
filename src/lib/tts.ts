@@ -10,6 +10,7 @@ import {
   speakOffline,
   supportsOfflineTts,
 } from './offlineTts';
+import { getSherpaVoices, speakSherpa, stopSherpa } from './sherpaTts';
 
 export interface TTSVoice {
   voiceURI: string;
@@ -17,6 +18,7 @@ export interface TTSVoice {
   lang: string;
   localService?: boolean;
   default?: boolean;
+  gender?: 'male' | 'female';
 }
 
 /** Reason a speak() call failed — surfaced to the caller via onError. */
@@ -179,9 +181,10 @@ const loadNative = (): Promise<TextToSpeechPlugin | null> => {
 };
 
 const nativeGetVoices = async (): Promise<TTSVoice[]> => {
+  const sherpaVoices = await getSherpaVoices();
   const offlineVoices = getOfflineVoices();
   const tts = await loadNative();
-  if (!tts) return offlineVoices;
+  if (!tts) return [...sherpaVoices, ...offlineVoices];
   try {
     const res = await tts.getSupportedVoices();
     const voices = res?.voices || [];
@@ -192,10 +195,10 @@ const nativeGetVoices = async (): Promise<TTSVoice[]> => {
       localService: v.localService,
       default: v.default,
     }));
-    return [...offlineVoices, ...nativeVoices];
+    return [...sherpaVoices, ...offlineVoices, ...nativeVoices];
   } catch (err) {
     console.warn('[tts] getSupportedVoices failed', err);
-    return offlineVoices;
+    return [...sherpaVoices, ...offlineVoices];
   }
 };
 
@@ -249,6 +252,8 @@ const resolveSupportedLang = async (
 };
 
 const nativeSpeak = async (opts: SpeakOptions): Promise<void> => {
+  if (await speakSherpa(opts)) return;
+
   const tts = await loadNative();
   if (!tts) { webSpeak(opts); return; }
   const text = stripHtmlForSpeech(opts.text);
@@ -329,6 +334,7 @@ const nativeSpeak = async (opts: SpeakOptions): Promise<void> => {
 
 const nativeCancel = async (): Promise<void> => {
   cancelOffline();
+  await stopSherpa();
   const tts = await loadNative();
   if (!tts) { webCancel(); return; }
   try { await tts.stop(); } catch { /* ignore */ }
