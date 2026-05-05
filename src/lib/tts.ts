@@ -1,4 +1,9 @@
 import { getPlatform, isNativePlatform } from './platform';
+import type {
+  SpeechSynthesisVoice as NativeSpeechSynthesisVoice,
+  TTSOptions,
+  TextToSpeechPlugin,
+} from '@capacitor-community/text-to-speech';
 import {
   cancelOffline,
   getOfflineVoices,
@@ -160,8 +165,8 @@ const webCancel = (): void => {
 
 // ---------- Native (Capacitor) implementation ----------
 
-let nativeModulePromise: Promise<any> | null = null;
-const loadNative = (): Promise<any> => {
+let nativeModulePromise: Promise<TextToSpeechPlugin | null> | null = null;
+const loadNative = (): Promise<TextToSpeechPlugin | null> => {
   if (!nativeModulePromise) {
     nativeModulePromise = import('@capacitor-community/text-to-speech')
       .then(mod => mod.TextToSpeech)
@@ -180,7 +185,7 @@ const nativeGetVoices = async (): Promise<TTSVoice[]> => {
   try {
     const res = await tts.getSupportedVoices();
     const voices = res?.voices || [];
-    const nativeVoices = voices.map((v: any) => ({
+    const nativeVoices = voices.map((v: NativeSpeechSynthesisVoice) => ({
       voiceURI: v.voiceURI,
       name: v.name,
       lang: v.lang,
@@ -211,7 +216,7 @@ const normalizeLangTag = (lang: string): string => {
  * Returns null if nothing matches.
  */
 const resolveSupportedLang = async (
-  tts: any,
+  tts: TextToSpeechPlugin,
   requested: string,
 ): Promise<string | null> => {
   const want = normalizeLangTag(requested);
@@ -275,7 +280,7 @@ const nativeSpeak = async (opts: SpeakOptions): Promise<void> => {
   let voiceIdx = -1;
   try {
     const voicesRes = await tts.getSupportedVoices();
-    const voices: any[] = voicesRes?.voices || [];
+    const voices: NativeSpeechSynthesisVoice[] = voicesRes?.voices || [];
     if (opts.voiceURI) {
       voiceIdx = voices.findIndex(v => v.voiceURI === opts.voiceURI);
     }
@@ -291,7 +296,7 @@ const nativeSpeak = async (opts: SpeakOptions): Promise<void> => {
 
   // `category` is iOS-only in the plugin's TTSOptions; pass only on iOS.
   const isIOS = getPlatform() === 'ios';
-  const speakOpts: Record<string, unknown> = {
+  const speakOpts: TTSOptions = {
     text,
     lang: resolvedLang,
     rate: clampRate(opts.rate),
@@ -304,8 +309,8 @@ const nativeSpeak = async (opts: SpeakOptions): Promise<void> => {
   setSpeakingState(true);
   try {
     await tts.speak(speakOpts);
-  } catch (err: any) {
-    const msg = String(err?.message || err || '');
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err || '');
     if (supportsOfflineTts(opts.lang) && speakOffline(opts, () => setSpeakingState(false))) {
       return;
     }
