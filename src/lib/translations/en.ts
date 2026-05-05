@@ -178,6 +178,14 @@ export const en = {
     stop: 'Stop',
     replay: 'Replay',
     speakFailed: 'Could not play audio',
+    voices: 'Voices',
+    voiceModes: 'Voice modes',
+    voiceModesDesc: 'Select one or more voices. Playback shuffles between selected voices.',
+    saveVoices: 'Save',
+    noVoicesForLanguage: 'No voices available for this language.',
+    selectedVoiceCount: '{count} selected',
+    male: 'Male',
+    female: 'Female',
   },
 
   // Per-deck settings dialog (sectioned: TTS, daily limits, FSRS, easy days, custom study)

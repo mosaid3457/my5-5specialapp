@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
         // plugins must be registered BEFORE super.onCreate so they are picked up
         // when the Bridge initializes inside super.onCreate.
         registerPlugin(TtsInstallerPlugin.class);
+        registerPlugin(SherpaTtsPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

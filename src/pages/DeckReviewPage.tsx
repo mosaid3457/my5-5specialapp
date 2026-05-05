@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Sparkles, Volume2, RotateCcw, Brain, Zap, Plus, Pencil, Trash2, MoreVertical, Square, BookOpen } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Sparkles, Volume2, RotateCcw, Brain, Zap, Plus, Pencil, Trash2, MoreVertical, Square, BookOpen, Settings } from 'lucide-react';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { useDisplayMode } from '@/hooks/useDisplayMode';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -24,10 +24,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
 import { resolveCardMedia, sanitizeCardHtml } from '@/lib/cardMedia';
 import { getCardReviewOptions } from '@/lib/cardFsrs';
 import { FSRSRating, Card as FlashCard } from '@/types/lesson';
-import { speak as ttsSpeak, cancel as ttsCancel, subscribeSpeaking } from '@/lib/tts';
+import { speak as ttsSpeak, cancel as ttsCancel, getVoices, subscribeSpeaking, type TTSVoice } from '@/lib/tts';
 import { detectLanguage } from '@/lib/langDetect';
 import { looksLikeLanguageDeck } from '@/lib/languageDeckDetect';
 import { cn } from '@/lib/utils';
@@ -48,13 +57,36 @@ const RATING_CONFIG: Record<FSRSRating, { Icon: typeof RotateCcw; className: str
   easy: { Icon: Sparkles, className: 'bg-primary/10 hover:bg-primary/20 text-primary border-primary/30', labelKey: 'ratings.easy' },
 };
 
+type SpeechSide = 'front' | 'back' | 'example';
+
+const normalizeLangTag = (lang: string): string => {
+  if (!lang) return lang;
+  const parts = lang.replace('_', '-').split('-');
+  const primary = parts[0]?.toLowerCase();
+  const region = parts[1]?.toUpperCase();
+  return primary && region ? `${primary}-${region}` : primary || lang;
+};
+
+const langMatches = (requested: string, candidate: string): boolean => {
+  const want = normalizeLangTag(requested).toLowerCase();
+  const got = normalizeLangTag(candidate).toLowerCase();
+  return want === got || want.split('-')[0] === got.split('-')[0];
+};
+
+const nextShuffledVoiceURI = (voiceURIs: string[], lastVoiceURI?: string): string | undefined => {
+  if (voiceURIs.length === 0) return undefined;
+  if (voiceURIs.length === 1) return voiceURIs[0];
+  const choices = voiceURIs.filter(uri => uri !== lastVoiceURI);
+  return choices[Math.floor(Math.random() * choices.length)];
+};
+
 export const DeckReviewPage = () => {
   const { deckId } = useParams<{ deckId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const jumpToCardId = (location.state as { jumpToCardId?: string } | null)?.jumpToCardId;
   const jumpedRef = useRef(false);
-  const { data, getDueCards, getCustomStudyCards, reviewCard, addCards, updateCard, deleteCard, updateSettings } = useLocalStorage();
+  const { data, getDueCards, getCustomStudyCards, reviewCard, addCards, updateCard, deleteCard, updateDeck, updateSettings } = useLocalStorage();
   const customStudy = (location.state as { customStudy?: import('@/components/DeckSettingsDialog').CustomStudyAction } | null)?.customStudy;
   const { containerClass } = useDisplayMode(data.settings.displayMode);
   const { t, isRTL } = useTranslation();
@@ -64,8 +96,16 @@ export const DeckReviewPage = () => {
   const [editCardOpen, setEditCardOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [installVoicesOpen, setInstallVoicesOpen] = useState(false);
+  const [voiceDialogSide, setVoiceDialogSide] = useState<SpeechSide | null>(null);
+  const [voices, setVoices] = useState<TTSVoice[]>([]);
+  const [voicesLoaded, setVoicesLoaded] = useState(false);
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const lastShuffledVoiceRef = useRef<Record<SpeechSide, string | undefined>>({
+    front: undefined,
+    back: undefined,
+    example: undefined,
+  });
   // IDs auto-suspended as leeches during this review session. When the
   // "Quiet leech notifications" setting is on, we skip the per-card toast
   // and instead surface them in the session-done summary.
@@ -89,6 +129,12 @@ export const DeckReviewPage = () => {
   const deckBackLang = deck?.ttsBackLang;
   const ttsRate = deck?.ttsRate ?? 1.0;
   const ttsAutoPlay = deck?.ttsAutoPlay ?? false;
+  const frontVoiceURIs = deck?.ttsFrontVoiceURIs?.length
+    ? deck.ttsFrontVoiceURIs
+    : (deck?.ttsFrontVoiceURI ? [deck.ttsFrontVoiceURI] : []);
+  const backVoiceURIs = deck?.ttsBackVoiceURIs?.length
+    ? deck.ttsBackVoiceURIs
+    : (deck?.ttsBackVoiceURI ? [deck.ttsBackVoiceURI] : []);
 
   // Snapshot due-card IDs once per session so the queue doesn't shrink mid-session.
   // When invoked with a Custom Study filter, build the queue from that scope
@@ -171,6 +217,22 @@ export const DeckReviewPage = () => {
     return subscribeSpeaking(setSpeaking);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    getVoices()
+      .then(v => {
+        if (cancelled) return;
+        setVoices(v);
+        setVoicesLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setVoices([]);
+        setVoicesLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   // Effective per-card language: explicit card override → auto-detect from text
   // → deck default. The voice URI is only meaningful when the lang matches the
   // deck-configured language; if detection picked a different lang, we let the
@@ -192,6 +254,18 @@ export const DeckReviewPage = () => {
     (currentCard?.example ? detectLanguage(currentCard.example) : null) ||
     effectiveFrontLang ||
     '';
+  const voiceDialogLang =
+    voiceDialogSide === 'back'
+      ? effectiveBackLang
+      : voiceDialogSide
+        ? effectiveFrontLang
+        : '';
+  const voiceDialogSelected =
+    voiceDialogSide === 'back'
+      ? backVoiceURIs
+      : voiceDialogSide
+        ? frontVoiceURIs
+        : [];
 
   // True when the deck has a target language configured (front OR back), OR
   // when its card content looks like a vocabulary deck (short term -> short
@@ -207,7 +281,7 @@ export const DeckReviewPage = () => {
     [deck, deckCards],
   );
 
-  const speakSide = (side: 'front' | 'back' | 'example') => {
+  const speakSide = (side: SpeechSide) => {
     if (!resolved) return;
     const lang =
       side === 'front'
@@ -218,15 +292,12 @@ export const DeckReviewPage = () => {
     if (!lang) return;
     const deckLang =
       side === 'front' ? deckFrontLang : side === 'back' ? deckBackLang : deckFrontLang;
-    const deckVoice =
-      side === 'front'
-        ? deck?.ttsFrontVoiceURI
-        : side === 'back'
-          ? deck?.ttsBackVoiceURI
-          : deck?.ttsFrontVoiceURI;
-    // Only reuse the deck-configured voice if the resolved language matches
-    // what the deck voice was picked for; otherwise let the platform default.
-    const voiceURI = lang === deckLang ? deckVoice : undefined;
+    const selectedVoiceURIs = side === 'back' ? backVoiceURIs : frontVoiceURIs;
+    const voiceURI =
+      lang === deckLang
+        ? nextShuffledVoiceURI(selectedVoiceURIs, lastShuffledVoiceRef.current[side])
+        : undefined;
+    lastShuffledVoiceRef.current[side] = voiceURI;
     const text =
       side === 'front'
         ? resolved.front
@@ -258,6 +329,32 @@ export const DeckReviewPage = () => {
         }
       },
     });
+  };
+
+  const saveVoiceModes = (side: SpeechSide, selectedVoiceURIs: string[]) => {
+    if (!deckId || !deck) return;
+    const primary = selectedVoiceURIs[0];
+    if (side === 'back') {
+      if (deckBackLang && primary) {
+        updateSettings({
+          lastTtsVoiceByLang: { ...(data.settings.lastTtsVoiceByLang || {}), [deckBackLang]: primary },
+        });
+      }
+      updateDeck(deckId, {
+        ttsBackVoiceURI: primary,
+        ttsBackVoiceURIs: selectedVoiceURIs.length ? selectedVoiceURIs : undefined,
+      });
+    } else {
+      if (deckFrontLang && primary) {
+        updateSettings({
+          lastTtsVoiceByLang: { ...(data.settings.lastTtsVoiceByLang || {}), [deckFrontLang]: primary },
+        });
+      }
+      updateDeck(deckId, {
+        ttsFrontVoiceURI: primary,
+        ttsFrontVoiceURIs: selectedVoiceURIs.length ? selectedVoiceURIs : undefined,
+      });
+    }
   };
 
   // Auto-prompt: if this deck wants TTS but the required system voices aren't
@@ -318,18 +415,6 @@ export const DeckReviewPage = () => {
     speakSide('back');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAnswer, resolved, ttsAutoPlay, effectiveBackLang]);
-
-  if (!deck) {
-    return (
-      <div className="min-h-screen bg-background pb-24 flex flex-col items-center justify-center px-6">
-        <p className="text-muted-foreground mb-4">{t('flashcards.deckNotFound')}</p>
-        <Button onClick={() => navigate('/flashcards')}>
-          <BackIcon className="w-4 h-4 mr-2" />
-          {t('flashcards.backToDecks')}
-        </Button>
-      </div>
-    );
-  }
 
   const totalDone = position;
   const total = initialTotal.current;
@@ -477,6 +562,18 @@ export const DeckReviewPage = () => {
     queue.length,
     position,
   ]);
+
+  if (!deck) {
+    return (
+      <div className="min-h-screen bg-background pb-24 flex flex-col items-center justify-center px-6">
+        <p className="text-muted-foreground mb-4">{t('flashcards.deckNotFound')}</p>
+        <Button onClick={() => navigate('/flashcards')}>
+          <BackIcon className="w-4 h-4 mr-2" />
+          {t('flashcards.backToDecks')}
+        </Button>
+      </div>
+    );
+  }
 
   const handleAddCardSubmit = (values: {
     front: string;
@@ -667,6 +764,8 @@ export const DeckReviewPage = () => {
                 speakLabel={t('tts.speak')}
                 stopLabel={t('tts.stop')}
                 editLabel={t('flashcards.editCard')}
+                voiceModesLabel={t('tts.voiceModes')}
+                onOpenVoiceModes={setVoiceDialogSide}
                 audioFront={resolved.audioFront}
                 audioBack={resolved.audioBack}
               />
@@ -679,6 +778,17 @@ export const DeckReviewPage = () => {
                     </Badge>
                     {effectiveFrontLang && (
                       <div className="flex items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setVoiceDialogSide('front')}
+                          className="h-7 w-7"
+                          aria-label={t('tts.voiceModes')}
+                          title={t('tts.voiceModes')}
+                        >
+                          <Settings className="w-4 h-4" />
+                        </Button>
                         <Button
                           type="button"
                           variant="ghost"
@@ -723,6 +833,17 @@ export const DeckReviewPage = () => {
                         </Badge>
                         {effectiveBackLang && (
                           <div className="flex items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setVoiceDialogSide('back')}
+                              className="h-7 w-7"
+                              aria-label={t('tts.voiceModes')}
+                              title={t('tts.voiceModes')}
+                            >
+                              <Settings className="w-4 h-4" />
+                            </Button>
                             <Button
                               type="button"
                               variant="ghost"
@@ -839,6 +960,35 @@ export const DeckReviewPage = () => {
       <InstallVoicesDialog
         open={installVoicesOpen}
         onOpenChange={setInstallVoicesOpen}
+      />
+
+      <VoiceModesDialog
+        open={!!voiceDialogSide}
+        onOpenChange={open => !open && setVoiceDialogSide(null)}
+        lang={voiceDialogLang}
+        voices={voices}
+        voicesLoaded={voicesLoaded}
+        selectedVoiceURIs={voiceDialogSelected}
+        onPreview={voiceURI => {
+          if (!voiceDialogLang) return;
+          ttsSpeak({
+            text: t('tts.previewSample'),
+            lang: voiceDialogLang,
+            voiceURI,
+            rate: ttsRate,
+          });
+        }}
+        onSave={selected => {
+          if (voiceDialogSide) saveVoiceModes(voiceDialogSide, selected);
+          setVoiceDialogSide(null);
+        }}
+        title={t('tts.voices')}
+        description={t('tts.voiceModesDesc')}
+        saveLabel={t('tts.saveVoices')}
+        emptyLabel={t('tts.noVoicesForLanguage')}
+        selectedCountLabel={count => t('tts.selectedVoiceCount', { count })}
+        maleLabel={t('tts.male')}
+        femaleLabel={t('tts.female')}
       />
 
       <AlertDialog open={exitConfirmOpen} onOpenChange={setExitConfirmOpen}>
@@ -962,9 +1112,11 @@ interface LanguageDeckCardProps {
   onSpeakExample: () => void;
   onStop: () => void;
   onEdit: () => void;
+  onOpenVoiceModes: (side: SpeechSide) => void;
   speakLabel: string;
   stopLabel: string;
   editLabel: string;
+  voiceModesLabel: string;
   audioFront: string[];
   audioBack: string[];
 }
@@ -1002,9 +1154,11 @@ const LanguageDeckCard = ({
   onSpeakExample,
   onStop,
   onEdit,
+  onOpenVoiceModes,
   speakLabel,
   stopLabel,
   editLabel,
+  voiceModesLabel,
   audioFront,
   audioBack,
 }: LanguageDeckCardProps) => {
@@ -1019,29 +1173,51 @@ const LanguageDeckCard = ({
             </div>
             <div className="flex items-center gap-2 text-base">
               {showFrontSpeaker && (
-                <button
-                  type="button"
-                  onClick={onSpeakFront}
-                  className="text-sky-400 hover:text-sky-500 transition-colors"
-                  aria-label={speakLabel}
-                  title={speakLabel}
-                >
-                  <Volume2 className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onOpenVoiceModes('front')}
+                    className="text-muted-foreground hover:text-sky-500 transition-colors"
+                    aria-label={voiceModesLabel}
+                    title={voiceModesLabel}
+                  >
+                    <Settings className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onSpeakFront}
+                    className="text-sky-400 hover:text-sky-500 transition-colors"
+                    aria-label={speakLabel}
+                    title={speakLabel}
+                  >
+                    <Volume2 className="w-4 h-4" />
+                  </button>
+                </div>
               )}
               <span className="font-medium">{renderHeadword(front)}</span>
             </div>
             <div className="mt-2 flex items-center justify-center gap-2">
               {showBackSpeaker && (
-                <button
-                  type="button"
-                  onClick={onSpeakBack}
-                  className="text-sky-400 hover:text-sky-500 transition-colors"
-                  aria-label={speakLabel}
-                  title={speakLabel}
-                >
-                  <Volume2 className="w-5 h-5" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onOpenVoiceModes('back')}
+                    className="text-muted-foreground hover:text-sky-500 transition-colors"
+                    aria-label={voiceModesLabel}
+                    title={voiceModesLabel}
+                  >
+                    <Settings className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onSpeakBack}
+                    className="text-sky-400 hover:text-sky-500 transition-colors"
+                    aria-label={speakLabel}
+                    title={speakLabel}
+                  >
+                    <Volume2 className="w-5 h-5" />
+                  </button>
+                </div>
               )}
               <div
                 className="text-2xl font-semibold anki-card-content"
@@ -1099,15 +1275,26 @@ const LanguageDeckCard = ({
           <>
             <div className="flex items-center gap-3 text-2xl sm:text-3xl">
               {showFrontSpeaker && (
-                <button
-                  type="button"
-                  onClick={onSpeakFront}
-                  className="text-sky-400 hover:text-sky-500 transition-colors"
-                  aria-label={speakLabel}
-                  title={speakLabel}
-                >
-                  <Volume2 className="w-6 h-6" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onOpenVoiceModes('front')}
+                    className="text-muted-foreground hover:text-sky-500 transition-colors"
+                    aria-label={voiceModesLabel}
+                    title={voiceModesLabel}
+                  >
+                    <Settings className="w-5 h-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onSpeakFront}
+                    className="text-sky-400 hover:text-sky-500 transition-colors"
+                    aria-label={speakLabel}
+                    title={speakLabel}
+                  >
+                    <Volume2 className="w-6 h-6" />
+                  </button>
+                </div>
               )}
               <span className="font-medium">{renderHeadword(front)}</span>
             </div>
@@ -1135,6 +1322,143 @@ const LanguageDeckCard = ({
         )}
       </div>
     </StackedPaper>
+  );
+};
+
+interface VoiceModesDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  lang: string;
+  voices: TTSVoice[];
+  voicesLoaded: boolean;
+  selectedVoiceURIs: string[];
+  onPreview: (voiceURI: string) => void;
+  onSave: (selectedVoiceURIs: string[]) => void;
+  title: string;
+  description: string;
+  saveLabel: string;
+  emptyLabel: string;
+  selectedCountLabel: (count: number) => string;
+  maleLabel: string;
+  femaleLabel: string;
+}
+
+const inferVoiceGender = (voice: TTSVoice): 'male' | 'female' | undefined => {
+  if (voice.gender) return voice.gender;
+  const haystack = `${voice.name} ${voice.voiceURI}`.toLowerCase();
+  if (/\b(male|man|conrad|wavenet-b|guy|david|mark|paul|george)\b/.test(haystack)) return 'male';
+  if (/\b(female|woman|katja|wavenet-c|amy|anna|susan|zira|eva)\b/.test(haystack)) return 'female';
+  return undefined;
+};
+
+const VoiceModesDialog = ({
+  open,
+  onOpenChange,
+  lang,
+  voices,
+  voicesLoaded,
+  selectedVoiceURIs,
+  onPreview,
+  onSave,
+  title,
+  description,
+  saveLabel,
+  emptyLabel,
+  selectedCountLabel,
+  maleLabel,
+  femaleLabel,
+}: VoiceModesDialogProps) => {
+  const [draft, setDraft] = useState<string[]>(selectedVoiceURIs);
+
+  useEffect(() => {
+    if (open) setDraft(selectedVoiceURIs);
+  }, [open, selectedVoiceURIs]);
+
+  const availableVoices = useMemo(() => {
+    return voices
+      .filter(voice => langMatches(lang, voice.lang))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [voices, lang]);
+
+  const toggleVoice = (voiceURI: string) => {
+    setDraft(prev =>
+      prev.includes(voiceURI)
+        ? prev.filter(uri => uri !== voiceURI)
+        : [...prev, voiceURI],
+    );
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm rounded-2xl p-0 overflow-hidden">
+        <DialogHeader className="px-6 pt-6 pb-2 text-center">
+          <DialogTitle className="text-2xl font-heading">{title}</DialogTitle>
+          <DialogDescription className="sr-only">{description}</DialogDescription>
+        </DialogHeader>
+
+        <div className="px-6 pb-4 space-y-1">
+          {availableVoices.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              {voicesLoaded ? emptyLabel : '…'}
+            </p>
+          ) : (
+            availableVoices.map(voice => {
+              const checked = draft.includes(voice.voiceURI);
+              const gender = inferVoiceGender(voice);
+              return (
+                <div
+                  key={voice.voiceURI}
+                  className={cn(
+                    'flex items-center gap-3 rounded-xl px-1 py-2',
+                    !checked && 'opacity-45',
+                  )}
+                >
+                  <Checkbox
+                    checked={checked}
+                    onCheckedChange={() => toggleVoice(voice.voiceURI)}
+                    className="h-6 w-6 rounded-md border-2"
+                    aria-label={voice.name}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onPreview(voice.voiceURI)}
+                    className="text-sky-400 hover:text-sky-500 transition-colors"
+                    aria-label={voice.name}
+                  >
+                    <Volume2 className="w-6 h-6" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleVoice(voice.voiceURI)}
+                    className="flex flex-1 items-center gap-2 text-left"
+                  >
+                    <span className="text-lg font-medium truncate">{voice.name}</span>
+                    {gender && (
+                      <span className="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
+                        {gender === 'male' ? maleLabel : femaleLabel}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <DialogFooter className="px-6 pb-6 sm:justify-center">
+          <Button
+            type="button"
+            className="w-full h-12 rounded-full text-base font-bold uppercase bg-sky-500 hover:bg-sky-600"
+            onClick={() => onSave(draft)}
+          >
+            {saveLabel}
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">
+            {selectedCountLabel(draft.length)}
+          </p>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

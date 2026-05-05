@@ -200,6 +200,8 @@ export interface Deck {
   ttsBackLang?: string;
   ttsFrontVoiceURI?: string; // Optional specific voice
   ttsBackVoiceURI?: string;
+  ttsFrontVoiceURIs?: string[]; // Optional speaker shuffle pool
+  ttsBackVoiceURIs?: string[];
   ttsAutoPlay?: boolean;
   ttsRate?: number;          // 0.5 - 1.5, default 1.0
 }

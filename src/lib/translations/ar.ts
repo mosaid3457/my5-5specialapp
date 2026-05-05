@@ -180,6 +180,14 @@ export const ar: TranslationKeys = {
     stop: 'إيقاف',
     replay: 'إعادة',
     speakFailed: 'تعذّر تشغيل الصوت',
+    voices: 'الأصوات',
+    voiceModes: 'أنماط الصوت',
+    voiceModesDesc: 'اختر صوتًا واحدًا أو أكثر. سيبدّل التشغيل عشوائيًا بين الأصوات المختارة.',
+    saveVoices: 'حفظ',
+    noVoicesForLanguage: 'لا توجد أصوات متاحة لهذه اللغة.',
+    selectedVoiceCount: '{count} محدد',
+    male: 'ذكر',
+    female: 'أنثى',
   },
 
   // إعدادات الرزمة لكل رزمة (مقسّمة إلى أقسام: النطق، الحدود اليومية، FSRS، الأيام السهلة، الدراسة المخصّصة)
